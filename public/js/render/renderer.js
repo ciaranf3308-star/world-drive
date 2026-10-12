@@ -1,4 +1,5 @@
 import { makeFrame } from '../geo/proj.js';
+const MARK_WHITE = '#ecece2';
 // Pixel-art map renderer. All world units are metres; camera handles scale.
 export class Renderer {
     ctx;
@@ -78,18 +79,131 @@ export class Renderer {
         // --- roads: casing then asphalt
         for (const s of net.segments)
             this.drawRoad(s, cam);
-        // --- simple centre dashes for two-way roads (Phase 1 placeholder; Phase 2 = proper markings)
-        ctx.strokeStyle = 'rgba(240,240,230,0.85)';
-        for (const s of net.segments) {
-            if (s.oneway || s.roundabout || s.lanesPerDir < 1)
-                continue;
-            ctx.lineWidth = Math.max(1, 0.15 * cam.zoom);
-            ctx.setLineDash([Math.max(2, 2 * cam.zoom), Math.max(2, 2 * cam.zoom)]);
-            this.strokePoly(s.centreline, cam, 0);
-            ctx.setLineDash([]);
+        // --- Irish road markings, generated from lane topology (Phase 2)
+        if (cam.zoom >= 0.3) {
+            for (const s of net.segments)
+                this.drawMarkings(s, cam);
         }
         if (this.debugMode >= 1)
             this.drawDebug(net, cam);
+    }
+    drawMarkings(s, cam) {
+        const { ctx } = this;
+        const z = cam.zoom;
+        const thin = Math.max(1, 0.12 * z);
+        ctx.strokeStyle = MARK_WHITE;
+        ctx.fillStyle = MARK_WHITE;
+        ctx.lineCap = 'butt';
+        for (const m of s.markings) {
+            switch (m.type) {
+                case 'centre-dashed':
+                    ctx.lineWidth = thin;
+                    ctx.setLineDash([Math.max(2, 3 * z), Math.max(2, 4.5 * z)]);
+                    this.strokePoly(m.pts, cam, 0);
+                    ctx.setLineDash([]);
+                    break;
+                case 'centre-double-solid':
+                case 'edge-solid':
+                    ctx.lineWidth = thin;
+                    this.strokePoly(m.pts, cam, 0);
+                    break;
+                case 'lane-dash':
+                    ctx.lineWidth = thin;
+                    ctx.setLineDash([Math.max(2, 2 * z), Math.max(2, 3 * z)]);
+                    this.strokePoly(m.pts, cam, 0);
+                    ctx.setLineDash([]);
+                    break;
+                case 'stop-line':
+                    this.strokePoly(m.pts, cam, Math.max(2, 0.45 * z));
+                    break;
+                case 'yield-line':
+                    ctx.lineWidth = Math.max(1.5, 0.3 * z);
+                    ctx.setLineDash([Math.max(2, 1 * z), Math.max(2, 1 * z)]);
+                    this.strokePoly(m.pts, cam, 0);
+                    ctx.setLineDash([]);
+                    break;
+                case 'yield-triangle':
+                    ctx.lineWidth = thin;
+                    this.strokeClosed(m.pts, cam);
+                    break;
+                case 'arrow':
+                    this.drawArrow(m, cam);
+                    break;
+                case 'text':
+                    this.drawRoadText(m, cam);
+                    break;
+            }
+        }
+    }
+    drawArrow(m, cam) {
+        const { ctx } = this;
+        const [sx, sy] = cam.worldToScreen(m.pos[0], m.pos[1]);
+        const L = Math.max(12, 4.5 * cam.zoom); // arrow length px (~4.5m)
+        const w = Math.max(1.5, 0.35 * cam.zoom);
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(-(m.headingDeg * Math.PI / 180)); // math angle -> canvas angle
+        ctx.strokeStyle = MARK_WHITE;
+        ctx.fillStyle = MARK_WHITE;
+        ctx.lineWidth = w;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        const head = (x, y, dx, dy) => {
+            const s = L * 0.16;
+            ctx.beginPath();
+            ctx.moveTo(x + dx * s * 1.6, y + dy * s * 1.6);
+            ctx.lineTo(x - dy * s, y + dx * s);
+            ctx.lineTo(x + dy * s, y - dx * s);
+            ctx.closePath();
+            ctx.fill();
+        };
+        for (const move of m.moves) {
+            ctx.beginPath();
+            if (move === 'through') {
+                ctx.moveTo(-L / 2, 0);
+                ctx.lineTo(L * 0.32, 0);
+                ctx.stroke();
+                head(L * 0.32, 0, 1, 0);
+            }
+            else if (move === 'left') { // canvas -y (up after rotation)
+                ctx.moveTo(-L / 2, 0);
+                ctx.lineTo(-L * 0.02, 0);
+                ctx.quadraticCurveTo(L * 0.08, 0, L * 0.02, -L * 0.32);
+                ctx.stroke();
+                head(L * 0.02, -L * 0.32, 0, -1);
+            }
+            else if (move === 'right') {
+                ctx.moveTo(-L / 2, 0);
+                ctx.lineTo(-L * 0.02, 0);
+                ctx.quadraticCurveTo(L * 0.08, 0, L * 0.02, L * 0.32);
+                ctx.stroke();
+                head(L * 0.02, L * 0.32, 0, 1);
+            }
+        }
+        ctx.restore();
+    }
+    drawRoadText(m, cam) {
+        const { ctx } = this;
+        const [sx, sy] = cam.worldToScreen(m.pos[0], m.pos[1]);
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(-(m.headingDeg * Math.PI / 180));
+        ctx.fillStyle = MARK_WHITE;
+        ctx.font = `bold ${Math.max(9, 1.7 * cam.zoom)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(m.text, 0, 0);
+        ctx.restore();
+    }
+    strokeClosed(pts, cam) {
+        const { ctx } = this;
+        ctx.beginPath();
+        pts.forEach(([x, y], i) => {
+            const [sx, sy] = cam.worldToScreen(x, y);
+            i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+        });
+        ctx.closePath();
+        ctx.stroke();
     }
     roadWidthM(s) {
         const dirs = s.oneway || s.roundabout ? 1 : 2;
@@ -166,6 +280,25 @@ export class Renderer {
                 ctx.fillStyle = '#fff';
                 ctx.font = '9px monospace';
                 ctx.fillText(`${j.id} deg${j.degree}`, sx + 6, sy + 3);
+            }
+        }
+        // turn connections (allowed manoeuvres per junction)
+        const connColor = {
+            through: '#39d353', left: '#33ccff', right: '#ff66cc',
+            'roundabout-entry': '#ffbb33', 'roundabout-exit': '#99ee66', circulate: '#ffee66',
+        };
+        for (const j of net.junctions) {
+            const [jx, jy] = cam.worldToScreen(j.x, j.y);
+            for (const c of j.connections) {
+                // draw departure tick in the exit direction, coloured by manoeuvre
+                const dx = c.toHx, dy = -c.toHy; // math -> screen
+                const len = this.debugMode >= 2 ? 12 : 8;
+                ctx.strokeStyle = connColor[c.kind] || '#fff';
+                ctx.lineWidth = this.debugMode >= 2 ? 2 : 1;
+                ctx.beginPath();
+                ctx.moveTo(jx + dx * 3, jy + dy * 3);
+                ctx.lineTo(jx + dx * len, jy + dy * len);
+                ctx.stroke();
             }
         }
         // chunk bbox (lat/lon -> local metres)

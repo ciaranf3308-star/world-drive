@@ -6,6 +6,7 @@
   "scripts": {
     "fetch:clane": "node tools/fetch-osm.mjs",
     "build:net": "node tools/build-network.mjs",
+    "validate": "node tools/validate.mjs",
     "test": "node --test tests/",
     "serve": "node tools/serve.mjs"
   },
