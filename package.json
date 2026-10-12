@@ -1,0 +1,16 @@
+{
+  "name": "world-drive",
+  "version": "0.1.0",
+  "description": "WORLD DRIVE — real-world pixel-art driving simulator. Phase 1: Clane, Co. Kildare.",
+  "type": "module",
+  "scripts": {
+    "fetch:clane": "node tools/fetch-osm.mjs",
+    "build:net": "node tools/build-network.mjs",
+    "test": "node --test tests/",
+    "serve": "node tools/serve.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "typescript": "^7.0.2"
+  }
+}

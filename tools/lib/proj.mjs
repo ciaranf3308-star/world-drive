@@ -1,0 +1,22 @@
+// Local tangent-plane frame: true metres, x=east, y=north.
+// x = R·cos(lat0)·Δlon, y = R·Δlat. Distortion is negligible (<0.01%)
+// over the few-km chunks this game streams.
+const R = 6378137;
+const D2R = Math.PI / 180;
+
+export function makeFrame(lat0, lon0) {
+  const kx = R * Math.cos(lat0 * D2R); // metres per radian of longitude
+  const x0 = kx * lon0 * D2R;
+  const y0 = R * lat0 * D2R;
+  return {
+    lat0, lon0,
+    toLocal(lat, lon) { return [kx * lon * D2R - x0, R * lat * D2R - y0]; },
+    toLatLon(x, y) {
+      const lon = ((x + x0) / kx) / D2R;
+      const lat = ((y + y0) / R) / D2R;
+      return [lat, lon];
+    },
+    mPerDegLat: R * D2R,
+    mPerDegLon: kx * D2R,
+  };
+}
