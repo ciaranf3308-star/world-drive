@@ -516,19 +516,30 @@ export class Sim {
   private deadEnd(v: Vehicle): void {
     const lane = this.idx.lanes.get(v.laneId)!;
     const opp = lane.seg.lanes.find(l => l.dir !== lane.dir);
-    if (opp) {
-      const nl = this.idx.lanes.get(opp.id)!;
-      v.laneId = nl.id;
-      v.s = Math.max(0, Math.min(nl.length, travelArc(nl, v.x, v.y)));
-      v.lat = 0;
-      v.changeTarget = null;
-      v.evIdx = 0;
-      v.committed = false;
-      v.waitStart = null;
-      this.replan(v, 'deadend');
-    } else {
-      this.respawn(v);
+    // No opposite lane, or the U-turn slot is occupied: end this trip and
+    // start a new one elsewhere. Waiting at a lane end for a U-turn slot
+    // deadlocks (vehicles queue behind, and nearby waiters block each other
+    // via proximity), so a blocked U-turn becomes a respawn, never a wait.
+    if (!opp) { this.respawn(v); return; }
+    const nl = this.idx.lanes.get(opp.id)!;
+    const targetS = Math.max(0, Math.min(nl.length, travelArc(nl, v.x, v.y)));
+    const [tx, ty] = pointAtArc(nl.pts, nl.cum, targetS);
+    for (const o of this.vehicles) {
+      if (o.id === v.id) continue;
+      if (o.laneId === nl.id) {
+        const ds = o.s - targetS;
+        if (ds > -(8 + v.length) && ds < 10 + o.length) { this.respawn(v); return; }
+      }
+      if (Math.hypot(o.x - tx, o.y - ty) < 3.0) { this.respawn(v); return; }
     }
+    v.laneId = nl.id;
+    v.s = targetS;
+    v.lat = 0;
+    v.changeTarget = null;
+    v.evIdx = 0;
+    v.committed = false;
+    v.waitStart = null;
+    this.replan(v, 'deadend');
   }
 
   private respawn(v: Vehicle): void {
