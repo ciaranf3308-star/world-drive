@@ -1,13 +1,71 @@
 import { makeFrame } from '../geo/proj.js';
+import { PALETTE } from '../traffic/sim.js';
 const MARK_WHITE = '#ecece2';
+const PX_PER_M = 9; // sprite resolution
 // Pixel-art map renderer. All world units are metres; camera handles scale.
 export class Renderer {
     ctx;
     grassTile;
+    sprites = new Map();
     debugMode = 0; // 0=off, 1=lanes+junctions, 2=+ids+bbox
     constructor(ctx) {
         this.ctx = ctx;
         this.grassTile = this.makeGrassTile();
+    }
+    spriteFor(cls, colour) {
+        const key = cls + '_' + colour;
+        let sp = this.sprites.get(key);
+        if (!sp) {
+            sp = cls === 'van' ? this.makeVanSprite(colour) : this.makeCarSprite(colour);
+            this.sprites.set(key, sp);
+        }
+        return sp;
+    }
+    hex(c) { return '#' + c.toString(16).padStart(6, '0'); }
+    shade(c, f) {
+        const r = Math.min(255, ((c >> 16) & 255) * f) | 0;
+        const g = Math.min(255, ((c >> 8) & 255) * f) | 0;
+        const b = Math.min(255, (c & 255) * f) | 0;
+        return `rgb(${r},${g},${b})`;
+    }
+    // Top-down car sprite, facing up (-y = front). Pixel-art: chunky rects.
+    makeCarSprite(colour) {
+        const w = Math.ceil(1.85 * PX_PER_M), h = Math.ceil(4.4 * PX_PER_M);
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const g = c.getContext('2d');
+        g.fillStyle = this.shade(colour, 0.55);
+        g.fillRect(0, 0, w, h); // outline
+        g.fillStyle = this.hex(colour);
+        g.fillRect(1, 1, w - 2, h - 2); // body
+        g.fillStyle = this.shade(colour, 1.18);
+        g.fillRect(2, Math.floor(h * 0.42), w - 4, Math.floor(h * 0.22)); // roof highlight
+        g.fillStyle = '#232d3a'; // glass
+        g.fillRect(2, 3, w - 4, Math.floor(h * 0.16)); // windshield
+        g.fillRect(2, Math.floor(h * 0.72), w - 4, Math.floor(h * 0.10)); // rear window
+        g.fillStyle = 'rgba(255,255,255,0.25)';
+        g.fillRect(2, 3, w - 4, 2); // glass shine
+        return c;
+    }
+    makeVanSprite(colour) {
+        const w = Math.ceil(2.0 * PX_PER_M), h = Math.ceil(6.8 * PX_PER_M);
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const g = c.getContext('2d');
+        g.fillStyle = this.shade(colour, 0.55);
+        g.fillRect(0, 0, w, h);
+        g.fillStyle = this.hex(colour);
+        g.fillRect(1, 1, w - 2, h - 2);
+        g.fillStyle = '#232d3a';
+        g.fillRect(2, 3, w - 4, Math.floor(h * 0.12)); // cab windshield
+        g.fillStyle = 'rgba(0,0,0,0.12)'; // cargo panel lines
+        for (let y = Math.floor(h * 0.3); y < h - 3; y += 5)
+            g.fillRect(2, y, w - 4, 1);
+        g.fillStyle = this.shade(colour, 1.15);
+        g.fillRect(2, Math.floor(h * 0.2), w - 4, 2); // cab roof edge
+        return c;
     }
     makeGrassTile() {
         const c = document.createElement('canvas');
@@ -25,7 +83,7 @@ export class Renderer {
         }
         return c;
     }
-    render(net, cam, mouse) {
+    render(net, cam, mouse, traffic) {
         const { ctx } = this;
         const W = cam.w, H = cam.h;
         ctx.imageSmoothingEnabled = false;
@@ -84,8 +142,11 @@ export class Renderer {
             for (const s of net.segments)
                 this.drawMarkings(s, cam);
         }
+        // --- traffic (Phase 3)
+        if (traffic && cam.zoom > 0.22)
+            this.renderVehicles(traffic, cam);
         if (this.debugMode >= 1)
-            this.drawDebug(net, cam);
+            this.drawDebug(net, cam, traffic);
     }
     drawMarkings(s, cam) {
         const { ctx } = this;
@@ -205,6 +266,48 @@ export class Renderer {
         ctx.closePath();
         ctx.stroke();
     }
+    // --- AI traffic: procedural pixel-art vehicles, smoothly rotated
+    renderVehicles(traffic, cam) {
+        const { ctx } = this;
+        const blink = Math.floor(traffic.time * 2.5) % 2 === 0;
+        for (const v of traffic.sim.vehicles) {
+            const [sx, sy] = cam.worldToScreen(v.x, v.y);
+            if (sx < -60 || sy < -60 || sx > cam.w + 60 || sy > cam.h + 60)
+                continue;
+            const sp = this.spriteFor(v.cls, PALETTE[v.colour % PALETTE.length]);
+            const w = v.width * cam.zoom, h = v.length * cam.zoom;
+            // drop shadow
+            ctx.save();
+            ctx.translate(sx + Math.max(1, 0.25 * cam.zoom), sy + Math.max(1, 0.35 * cam.zoom));
+            ctx.rotate(Math.PI / 2 - v.heading);
+            ctx.fillStyle = 'rgba(0,0,0,0.28)';
+            ctx.fillRect(-w / 2, -h / 2, w, h);
+            ctx.restore();
+            // body
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.rotate(Math.PI / 2 - v.heading);
+            ctx.drawImage(sp, -w / 2, -h / 2, w, h);
+            // lights in vehicle-local space: +x = right, -y = front
+            const lw = Math.max(1, w * 0.14), lh = Math.max(1, h * 0.05);
+            // headlights (front)
+            ctx.fillStyle = '#fff6c9';
+            ctx.fillRect(-w / 2 + 1, -h / 2, lw, lh);
+            ctx.fillRect(w / 2 - 1 - lw, -h / 2, lw, lh);
+            // brake lights (rear)
+            ctx.fillStyle = v.brake ? '#ff2a2a' : '#8f1414';
+            ctx.fillRect(-w / 2 + 1, h / 2 - lh, lw, lh);
+            ctx.fillRect(w / 2 - 1 - lw, h / 2 - lh, lw, lh);
+            // indicators
+            if (v.indicator !== 'off' && blink) {
+                ctx.fillStyle = '#ffaa00';
+                const ix = v.indicator === 'left' ? -w / 2 + 1 : w / 2 - 1 - lw;
+                ctx.fillRect(ix, -h / 2, lw, lh);
+                ctx.fillRect(ix, h / 2 - lh, lw, lh);
+            }
+            ctx.restore();
+        }
+    }
     roadWidthM(s) {
         const dirs = s.oneway || s.roundabout ? 1 : 2;
         return s.lanesPerDir * s.laneWidthM * dirs + 1.0; // +1m shoulders
@@ -247,7 +350,7 @@ export class Renderer {
         ctx.closePath();
         ctx.fill();
     }
-    drawDebug(net, cam) {
+    drawDebug(net, cam, traffic) {
         const { ctx } = this;
         // lane centre-lines
         ctx.lineWidth = 1;
@@ -317,6 +420,70 @@ export class Renderer {
             ctx.fillStyle = '#00ccff';
             ctx.font = '11px monospace';
             ctx.fillText(`chunk: Clane ${bb.south.toFixed(3)}..${bb.north.toFixed(3)}, ${bb.west.toFixed(3)}..${bb.east.toFixed(3)}`, 14, 26);
+        }
+        if (traffic)
+            this.drawTrafficDebug(traffic, cam);
+    }
+    drawTrafficDebug(traffic, cam) {
+        const { ctx } = this;
+        const sim = traffic.sim;
+        // junction reservation boxes (occupied conflict zones)
+        for (const [jid, set] of sim.occupancy) {
+            if (!set.size)
+                continue;
+            const j = sim.idx.junctionById.get(jid);
+            if (!j)
+                continue;
+            const [sx, sy] = cam.worldToScreen(j.x, j.y);
+            const r = 9 * cam.zoom;
+            ctx.strokeStyle = '#ff3333';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 3]);
+            ctx.strokeRect(sx - r, sy - r, r * 2, r * 2);
+            ctx.setLineDash([]);
+        }
+        for (const v of sim.vehicles) {
+            const [sx, sy] = cam.worldToScreen(v.x, v.y);
+            if (sx < -40 || sy < -40 || sx > cam.w + 40 || sy > cam.h + 40)
+                continue;
+            // target/actual speed label
+            if (cam.zoom > 0.7) {
+                ctx.fillStyle = v.v < 0.3 ? '#ff5555' : '#ffffff';
+                ctx.font = '9px monospace';
+                ctx.fillText(`${v.id}:${v.v.toFixed(1)}`, sx + 6, sy - 6);
+            }
+            if (this.debugMode >= 2) {
+                // collision circle
+                ctx.strokeStyle = '#ffdd33';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(sx, sy, (v.length / 2) * cam.zoom, 0, 7);
+                ctx.stroke();
+                // remaining route polyline (next few lanes)
+                ctx.strokeStyle = 'rgba(0,255,255,0.75)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                let started = false;
+                const steps = v.route.slice(0, 5);
+                for (let i = 0; i < steps.length; i++) {
+                    const lane = sim.idx.lanes.get(steps[i].laneId);
+                    if (!lane)
+                        continue;
+                    const pts = lane.pts;
+                    pts.forEach(([x, y], k) => {
+                        if (i === 0 && lane.cum[k] < v.s)
+                            return;
+                        const [px, py] = cam.worldToScreen(x, y);
+                        if (!started) {
+                            ctx.moveTo(px, py);
+                            started = true;
+                        }
+                        else
+                            ctx.lineTo(px, py);
+                    });
+                }
+                ctx.stroke();
+            }
         }
     }
 }
